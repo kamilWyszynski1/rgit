@@ -5,6 +5,7 @@ use std::{
     cmp::max,
     fs::{self, DirEntry, Metadata},
     path::PathBuf,
+    rc::Rc,
 };
 
 #[derive(Debug, PartialEq)]
@@ -22,20 +23,23 @@ struct FileNode {
     children: Option<Vec<FileNode>>,
 }
 
+/// Custom type for predicate that will skip files. Rc for clonability.
+type SkipPredicate = Rc<dyn Fn(&DirEntry, &PathBuf, &Metadata) -> bool>;
+
 impl FileNode {
-    fn new2(directory_path: &str) -> Result<Self> {
+    fn new(directory_path: &str) -> Result<Self> {
         Self::traverse_and_build(
             directory_path,
             vec![
                 ignore_by_file_name("target".into()),
-                ignore_dir_starting_with_dot2(),
+                ignore_dir_starting_with_dot(),
             ],
         )
     }
 
     fn traverse_and_build(
         directory_path: &str,
-        skip_predicates: Vec<Box<dyn Fn(&DirEntry, &PathBuf, &Metadata) -> bool>>,
+        skip_predicates: Vec<SkipPredicate>,
     ) -> Result<Self> {
         let mut root = Self {
             name: directory_path.into(),
@@ -55,7 +59,10 @@ impl FileNode {
             }
             println!("{:?}", entry);
             if metadata.is_dir() {
-                children.push(Self::new(path.to_str().unwrap())?);
+                children.push(Self::traverse_and_build(
+                    path.to_str().unwrap(),
+                    skip_predicates.clone(),
+                )?);
             }
             if metadata.is_file() {
                 children.push(Self {
@@ -73,57 +80,25 @@ impl FileNode {
         }
         Ok(root)
     }
-
-    fn new(directory_path: &str) -> Result<Self> {
-        let mut root = Self {
-            name: directory_path.into(),
-            file_type: FileType::Directory,
-            content: vec![],
-            children: None,
-        };
-        let mut children = vec![];
-        for entry in fs::read_dir(directory_path)? {
-            let entry = entry?;
-            let path = entry.path();
-            let metadata = fs::metadata(&path)?;
-
-            println!("{:?}", metadata);
-
-            if metadata.is_dir() {
-                children.push(Self::new(path.to_str().unwrap())?);
-            }
-            if metadata.is_file() {
-                children.push(Self {
-                    name: entry.file_name().to_str().unwrap().into(),
-                    file_type: FileType::File,
-                    content: vec![],
-                    children: None,
-                });
-            }
-        }
-        if !children.is_empty() {
-            root.children = Some(children);
-        }
-        Ok(root)
-    }
 }
 
-fn ignore_dir_starting_with_dot2() -> Box<dyn Fn(&DirEntry, &PathBuf, &Metadata) -> bool> {
-    Box::new(
-        move |entry: &DirEntry, path: &PathBuf, metadata: &Metadata| -> bool {
+/// Returned SkipPredicate will skip directiory that starts with "."
+fn ignore_dir_starting_with_dot() -> SkipPredicate {
+    Rc::new(
+        move |entry: &DirEntry, _: &PathBuf, metadata: &Metadata| -> bool {
             metadata.is_dir() && entry.file_name().to_str().unwrap().starts_with(".")
         },
     )
 }
 
-fn ignore_by_file_name(file_name: String) -> Box<dyn Fn(&DirEntry, &PathBuf, &Metadata) -> bool> {
-    Box::new(
-        move |entry: &DirEntry, path: &PathBuf, metadata: &Metadata| -> bool {
-            entry.file_name().to_str().unwrap().eq(&file_name)
-        },
-    )
+/// Returned SkipPredicate will skip files with given file name.
+fn ignore_by_file_name(file_name: String) -> SkipPredicate {
+    Rc::new(move |entry: &DirEntry, _: &PathBuf, _: &Metadata| -> bool {
+        entry.file_name().to_str().unwrap().eq(&file_name)
+    })
 }
 
+/// Function takes cursor and goes through whole directory.
 fn traverse_directory<F>(path: &str, mut cursor: F) -> Result<()>
 where
     F: FnMut(DirEntry, PathBuf, Metadata) -> Result<()>,
@@ -133,7 +108,7 @@ where
         let path = entry.path();
         let metadata = fs::metadata(&path)?;
 
-        cursor(entry, path, metadata);
+        cursor(entry, path, metadata)?;
     }
     Ok(())
 }
@@ -171,7 +146,7 @@ mod tests {
 
     #[test]
     fn test_new_file_tree() {
-        let root = FileNode::new2(".").unwrap();
+        let root = FileNode::new(".").unwrap();
         println!("{:?}", root)
     }
 }
