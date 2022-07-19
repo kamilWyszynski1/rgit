@@ -7,4 +7,4 @@ string Backtrack(int[,] C, char[] aStr, char[] bStr, int x, int y)
     if (C[x, y - 1] > C[x - 1, y])
         return backtrack(C, aStr, bStr, x, y - 1);
     return backtrack(C, aStr, bStr, x - 1, y);
-}
+}s
