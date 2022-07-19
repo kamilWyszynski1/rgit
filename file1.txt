@@ -1,0 +1,10 @@
+string Backtrack(int[,] C, char[] aStr, char[] bStr, int x, int y)
+{
+    if (x == 0 | y == 0)
+        return "";
+    if (aStr[x - 1] == bStr[y - 1]) // x-1, y-1
+        return backtrack(C, aStr, bStr, x - 1, y - 1) + aStr[x - 1]; // x-1
+    if (C[x, y - 1] > C[x - 1, y])
+        return backtrack(C, aStr, bStr, x, y - 1);
+    return backtrack(C, aStr, bStr, x - 1, y);
+}
