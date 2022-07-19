@@ -1,20 +1,141 @@
-use std::{cmp::max, collections::HashMap};
+use anyhow::{bail, Ok};
 
+use crate::Result;
+use std::{
+    cmp::max,
+    fs::{self, DirEntry, Metadata},
+    path::PathBuf,
+};
+
+#[derive(Debug, PartialEq)]
 /// Indicates if a file is normal file with a content or directory.
 enum FileType {
     File,
     Directory,
 }
 
-struct File {
+#[derive(Debug, PartialEq)]
+struct FileNode {
     name: String,
     file_type: FileType,
     content: Vec<u8>,
-    children: Option<Vec<File>>,
+    children: Option<Vec<FileNode>>,
 }
 
-impl File {
-    pub fn calculate_diff(&self, f2: &Self) {}
+impl FileNode {
+    fn new2(directory_path: &str) -> Result<Self> {
+        Self::traverse_and_build(
+            directory_path,
+            vec![
+                ignore_by_file_name("target".into()),
+                ignore_dir_starting_with_dot2(),
+            ],
+        )
+    }
+
+    fn traverse_and_build(
+        directory_path: &str,
+        skip_predicates: Vec<Box<dyn Fn(&DirEntry, &PathBuf, &Metadata) -> bool>>,
+    ) -> Result<Self> {
+        let mut root = Self {
+            name: directory_path.into(),
+            file_type: FileType::Directory,
+            content: vec![],
+            children: None,
+        };
+        let mut children = vec![];
+
+        traverse_directory(directory_path, |entry, path, metadata| {
+            for sk in &skip_predicates {
+                if sk(&entry, &path, &metadata) {
+                    println!("skipped {:?}", entry);
+
+                    return Ok(());
+                }
+            }
+            println!("{:?}", entry);
+            if metadata.is_dir() {
+                children.push(Self::new(path.to_str().unwrap())?);
+            }
+            if metadata.is_file() {
+                children.push(Self {
+                    name: entry.file_name().to_str().unwrap().into(),
+                    file_type: FileType::File,
+                    content: vec![],
+                    children: None,
+                });
+            }
+            Ok(())
+        })?;
+
+        if !children.is_empty() {
+            root.children = Some(children);
+        }
+        Ok(root)
+    }
+
+    fn new(directory_path: &str) -> Result<Self> {
+        let mut root = Self {
+            name: directory_path.into(),
+            file_type: FileType::Directory,
+            content: vec![],
+            children: None,
+        };
+        let mut children = vec![];
+        for entry in fs::read_dir(directory_path)? {
+            let entry = entry?;
+            let path = entry.path();
+            let metadata = fs::metadata(&path)?;
+
+            println!("{:?}", metadata);
+
+            if metadata.is_dir() {
+                children.push(Self::new(path.to_str().unwrap())?);
+            }
+            if metadata.is_file() {
+                children.push(Self {
+                    name: entry.file_name().to_str().unwrap().into(),
+                    file_type: FileType::File,
+                    content: vec![],
+                    children: None,
+                });
+            }
+        }
+        if !children.is_empty() {
+            root.children = Some(children);
+        }
+        Ok(root)
+    }
+}
+
+fn ignore_dir_starting_with_dot2() -> Box<dyn Fn(&DirEntry, &PathBuf, &Metadata) -> bool> {
+    Box::new(
+        move |entry: &DirEntry, path: &PathBuf, metadata: &Metadata| -> bool {
+            metadata.is_dir() && entry.file_name().to_str().unwrap().starts_with(".")
+        },
+    )
+}
+
+fn ignore_by_file_name(file_name: String) -> Box<dyn Fn(&DirEntry, &PathBuf, &Metadata) -> bool> {
+    Box::new(
+        move |entry: &DirEntry, path: &PathBuf, metadata: &Metadata| -> bool {
+            entry.file_name().to_str().unwrap().eq(&file_name)
+        },
+    )
+}
+
+fn traverse_directory<F>(path: &str, mut cursor: F) -> Result<()>
+where
+    F: FnMut(DirEntry, PathBuf, Metadata) -> Result<()>,
+{
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = fs::metadata(&path)?;
+
+        cursor(entry, path, metadata);
+    }
+    Ok(())
 }
 
 /// The longest common subsequence (LCS) problem is the problem of finding the longest subsequence common to all sequences in a set of sequences.
@@ -44,61 +165,13 @@ fn lcs(s1: &str, s2: &str, dp: &mut Vec<Vec<isize>>) -> usize {
     return value;
 }
 
-fn diff(s1: &str, s2: &str, dp: &mut Vec<Vec<isize>>) {
-    let (m, n) = (s1.len(), s2.len());
-
-    if m == 0 || n == 0 {
-        return ();
-    }
-
-    if s1.chars().last().unwrap() == s2.chars().last().unwrap() {
-        diff(&s1[..m - 1], &s2[..n - 1], dp);
-        println!(" {}", s1.chars().last().unwrap());
-    } else if n > 0 && (m == 0 || dp[m][n - 1] >= dp[m - 1][n]) {
-        diff(&s1, &s2[..n - 1], dp);
-        println!(" +{}", s2.chars().last().unwrap());
-    } else if m > 0 && (n == 0 || dp[m][n - 1] < dp[m - 1][n]) {
-        diff(&s1[..m - 1], s2, dp);
-        println!(" -{}", s1.chars().last().unwrap());
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use super::{diff, lcs};
-
-    fn test_case(s1: &str, s2: &str, compare: usize) {
-        assert_eq!(
-            lcs(s1, s2, &mut vec![vec![-1; s2.len()]; s1.len()]),
-            compare
-        )
-    }
+    use super::FileNode;
 
     #[test]
-    fn test_LCS() {
-        test_case("qwdqwd", "qweqweqwe", 4);
-        test_case("ABCDGH", "AEDFHR", 3);
-        test_case("AGGTAB", "GXTXAYB", 4);
-        test_case("workattech", "branch", 4);
-        test_case("helloworld", "playword", 5);
-        test_case("hello", "hello", 5);
-        test_case(
-                "pqowkdpqowkdpqowkdpqwkdpoqwkdpqwokdpoqwkdpoqwkdpoqwkdpoqwkdpoqwkdpqowdkqppqowkdpqowkdpqowkdpqwkdpoqwkdpqwokdpoqwkdpoqwkdpoqwkdpoqwkdpoqwkdpqowdkqppqowkdpqowkdpqowkdpqwkdpoqwkdpqwokdpoqwkdpoqwkdpoqwkdpoqwkdpoqwkdpqowdkqppqowkdpqowkdpqowkdpqwkdpoqwkdpqwokdpoqwkdpoqwkdpoqwkdpoqwkdpoqwkdpqowdkqppqowkdpqowkdpqowkdpqwkdpoqwkdpqwokdpoqwkdpoqwkdpoqwkdpoqwkdpoqwkdpqowdkqppqowkdpqowkdpqowkdpqwkdpoqwkdpqwokdpoqwkdpoqwkdpoqwkdpoqwkdpoqwkdpqowdkqppqowkdpqowkdpqowkdpqwkdpoqwkdpqwokdpoqwkdpoqwkdpoqwkdpoqwkdpoqwkdpqowdkqppqowkdpqowkdpqowkdpqwkdpoqwkdpqwokdpoqwkdpoqwkdpoqwkdpoqwkdpoqwkdpqowdkqp",
-                "opqwkdpoqwkdpoqwkdpoqkwdpoqkwpdoqkwpodkqwpodkqwpodkqpowkqwdpoqwkdpoqwkdqpowkopqwkdpoqwkdpoqwkdpoqkwdpoqkwpdoqkwpodkqwpodkqwpodkqpowkqwdpoqwkdpoqwkdqpowkopqwkdpoqwkdpoqwkdpoqkwdpoqkwpdoqkwpodkqwpodkqwpodkqpowkqwdpoqwkdpoqwkdqpowkopqwkdpoqwkdpoqwkdpoqkwdpoqkwpdoqkwpodkqwpodkqwpodkqpowkqwdpoqwkdpoqwkdqpowkopqwkdpoqwkdpoqwkdpoqkwdpoqkwpdoqkwpodkqwpodkqwpodkqpowkqwdpoqwkdpoqwkdqpowkopqwkdpoqwkdpoqwkdpoqkwdpoqkwpdoqkwpodkqwpodkqwpodkqpowkqwdpoqwkdpoqwkdqpowkopqwkdpoqwkdpoqwkdpoqkwdpoqkwpdoqkwpodkqwpodkqwpodkqpowkqwdpoqwkdpoqwkdqpowkopqwkdpoqwkdpoqwkdpoqkwdpoqkwpdoqkwpodkqwpodkqwpodkqpowkqwdpoqwkdpoqwkdqpowk",
-            456
-        );
-    }
-
-    fn diff_test_case(s1: &str, s2: &str) {
-        let mut dp = &mut vec![vec![-1; s2.len()]; s1.len()];
-        lcs(s1, s2, dp);
-        diff(s1, s2, dp)
-    }
-
-    #[test]
-    fn test_diff() {
-        diff_test_case("helloasd", "helzxc")
+    fn test_new_file_tree() {
+        let root = FileNode::new2(".").unwrap();
+        println!("{:?}", root)
     }
 }
