@@ -65,10 +65,11 @@ impl FileNode {
                 )?);
             }
             if metadata.is_file() {
+                let content = fs::read(path)?;
                 children.push(Self {
                     name: entry.file_name().to_str().unwrap().into(),
                     file_type: FileType::File,
-                    content: vec![],
+                    content: content,
                     children: None,
                 });
             }
