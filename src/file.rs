@@ -142,11 +142,91 @@ fn lcs(s1: &str, s2: &str, dp: &mut Vec<Vec<isize>>) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::FileNode;
+    use super::{FileNode, FileType};
 
     #[test]
     fn test_new_file_tree() {
         let root = FileNode::new(".").unwrap();
         println!("{:?}", root)
+    }
+
+    #[test]
+    fn test_new_file_tree_with_test_directory() {
+        let root = FileNode::new("test_directory").unwrap();
+        assert_eq!(
+            root,
+            FileNode {
+                name: "test_directory".into(),
+                file_type: FileType::Directory,
+                content: vec![],
+                children: Some(vec![
+                    FileNode {
+                        name: "4.txt".into(),
+                        file_type: FileType::File,
+                        content: vec![],
+                        children: None,
+                    },
+                    FileNode {
+                        name: "test_directory/dir2".into(),
+                        file_type: FileType::Directory,
+                        content: vec![],
+                        children: Some(vec![FileNode {
+                            name: "ignore.txt".into(),
+                            file_type: FileType::File,
+                            content: vec![],
+                            children: None,
+                        }]),
+                    },
+                    FileNode {
+                        name: "test_directory/dir3".into(),
+                        file_type: FileType::Directory,
+                        content: vec![],
+                        children: Some(vec![FileNode {
+                            name: "31.txt".into(),
+                            file_type: FileType::File,
+                            content: vec![],
+                            children: None,
+                        }]),
+                    },
+                    FileNode {
+                        name: "test_directory/dir1".into(),
+                        file_type: FileType::Directory,
+                        content: vec![],
+                        children: Some(vec![
+                            FileNode {
+                                name: "test_directory/dir1/dir12".into(),
+                                file_type: FileType::Directory,
+                                content: vec![],
+                                children: Some(vec![
+                                    FileNode {
+                                        name: "121.txt".into(),
+                                        file_type: FileType::File,
+                                        content: vec![],
+                                        children: None,
+                                    },
+                                    FileNode {
+                                        name: "122.txt".into(),
+                                        file_type: FileType::File,
+                                        content: vec![],
+                                        children: None,
+                                    }
+                                ])
+                            },
+                            FileNode {
+                                name: "test_directory/dir1/dir11".into(),
+                                file_type: FileType::Directory,
+                                content: vec![],
+                                children: Some(vec![FileNode {
+                                    name: "111.txt".into(),
+                                    file_type: FileType::File,
+                                    content: vec![],
+                                    children: None,
+                                }])
+                            },
+                        ])
+                    },
+                ])
+            }
+        )
     }
 }
