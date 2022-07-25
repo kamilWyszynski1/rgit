@@ -1,4 +1,5 @@
 use anyhow::{bail, Context};
+use clap::clap_derive::ArgEnum;
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
 use flate2::write::ZlibEncoder;
@@ -10,23 +11,12 @@ use std::str::{from_utf8, FromStr};
 use crate::repository::RGitRepository;
 use crate::Result;
 
+#[derive(Debug, Clone, Copy, ArgEnum)]
 pub enum GitObjectType {
-    GitCommit,
-    GitTree,
-    GitTag,
-    GitBlob { blob_data: Option<String> },
-}
-
-impl GitObjectType {
-    fn fmt(&self) -> String {
-        match self {
-            GitObjectType::GitCommit => "commit",
-            GitObjectType::GitTree => "tree",
-            GitObjectType::GitTag => "tag",
-            GitObjectType::GitBlob { blob_data: _ } => "blob",
-        }
-        .to_string()
-    }
+    Commit,
+    Tree,
+    Tag,
+    Blob,
 }
 
 impl FromStr for GitObjectType {
@@ -34,12 +24,36 @@ impl FromStr for GitObjectType {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
-            "commit" => Ok(Self::GitCommit),
-            "tree" => Ok(Self::GitTree),
-            "tag" => Ok(Self::GitTag),
-            "blob" => Ok(Self::GitBlob { blob_data: None }),
+            "commit" => Ok(Self::Commit),
+            "tree" => Ok(Self::Tree),
+            "tag" => Ok(Self::Tag),
+            "blob" => Ok(Self::Blob),
             _ => bail!("unsupported object format: {}", s),
         }
+    }
+}
+
+impl ToString for GitObjectType {
+    fn to_string(&self) -> String {
+        match self {
+            GitObjectType::Blob => "blob",
+            GitObjectType::Commit => "commit",
+            GitObjectType::Tag => "tag",
+            GitObjectType::Tree => "tree",
+        }
+        .into()
+    }
+}
+
+impl GitObjectType {
+    fn fmt(&self) -> String {
+        match self {
+            GitObjectType::Commit => "commit",
+            GitObjectType::Tree => "tree",
+            GitObjectType::Tag => "tag",
+            GitObjectType::Blob => "blob",
+        }
+        .to_string()
     }
 }
 
@@ -48,64 +62,85 @@ impl FromStr for GitObjectType {
 /// then null (0x00) (the null byte), then the contents of the object.
 pub struct GitObject<'a> {
     repo: &'a RGitRepository,
-    object_type: GitObjectType,
+    data: Option<String>,
+    object_type: Option<GitObjectType>,
 }
 
 impl<'a> GitObject<'a> {
-    pub fn new(raw: String, repo: &'a RGitRepository) -> Result<Self> {
+    pub fn new(
+        repo: &'a RGitRepository,
+        data: Option<String>,
+        object_type: Option<GitObjectType>,
+    ) -> Result<Self> {
+        let mut go = Self {
+            repo,
+            data: data.clone(),
+            object_type,
+        };
+
+        if let Some(data) = data {
+            go.deserialize(data);
+        }
+        Ok(go)
+    }
+
+    pub fn object_read(raw: String, repo: &'a RGitRepository) -> Result<Self> {
         // read objet type
+
         let x = raw.find(" ").context("space not found")?;
         let fmt = &raw[0..x];
 
         // read and validate object size
         let y = raw[x..].find(char::from(0)).expect("0x00 not found");
-        let size: usize = raw[x..y].parse()?;
+        debug!(
+            "GitObject::object_read - x: {}, y:{}, raw: {}",
+            x,
+            y,
+            &raw[x + 1..x + y]
+        );
+        let size: usize = raw[x + 1..x + y].parse()?;
 
-        if size != raw.len() - y - 1 {
+        debug!("GitObject: size: {}, raw.lem: {}", raw.len(), size);
+        if size != raw.len() - y - x - 1 {
             bail!("malformed object {}: bad length", size);
         }
 
-        Ok(Self {
+        Self::new(
             repo,
-            object_type: GitObjectType::from_str(fmt)?,
-        })
+            Some(raw[x + y + 1..].to_string()),
+            Some(GitObjectType::from_str(fmt)?),
+        )
     }
 
-    fn serialize(&self) -> String {
-        match &self.object_type {
-            GitObjectType::GitCommit => todo!(),
-            GitObjectType::GitTree => todo!(),
-            GitObjectType::GitTag => todo!(),
-            GitObjectType::GitBlob { blob_data } => {
-                blob_data.as_ref().expect("git blob has empty data").into()
-            }
+    pub fn serialize(&self) -> String {
+        match &self.object_type.as_ref().unwrap() {
+            GitObjectType::Commit => todo!(),
+            GitObjectType::Tree => todo!(),
+            GitObjectType::Tag => todo!(),
+            GitObjectType::Blob => self.data.as_ref().expect("git blob has empty data").into(),
         }
     }
 
-    fn deserialize(&mut self, data: String) {
-        match self.object_type {
-            GitObjectType::GitCommit => todo!(),
-            GitObjectType::GitTree => todo!(),
-            GitObjectType::GitTag => todo!(),
-            GitObjectType::GitBlob { blob_data: _ } => {
-                self.object_type = GitObjectType::GitBlob {
-                    blob_data: Some(data),
-                }
-            }
+    pub fn deserialize(&mut self, data: String) {
+        match self.object_type.as_ref().unwrap() {
+            GitObjectType::Commit => todo!(),
+            GitObjectType::Tree => todo!(),
+            GitObjectType::Tag => todo!(),
+            GitObjectType::Blob => self.data = Some(data),
         }
     }
 
     /// Writing an object is reading it in reverse: we compute the hash, insert the header, zlib-compress
     /// everything and write the result in place. This really shouldn’t require much explanation, just
     /// notice that the hash is computed after the header is added
-    pub fn write(&self, actually_write: Option<bool>) -> Result<String> {
+    pub fn object_write(&self, actually_write: Option<bool>) -> Result<String> {
         let actually_write = actually_write.unwrap_or(true);
 
         let data = self.serialize();
         // add header
         let result = format!(
             "{} {}{}{}",
-            self.object_type.fmt(),
+            self.object_type.as_ref().unwrap().fmt(),
             data.len(),
             char::from(0),
             data

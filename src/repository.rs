@@ -1,4 +1,4 @@
-use anyhow::{bail, Ok};
+use anyhow::{bail, Context, Ok};
 use configparser::ini::Ini;
 use flate2::read::ZlibDecoder;
 
@@ -74,8 +74,12 @@ impl RGitRepository {
     pub fn repo_file(&self, path: &[&str], mkdir: Option<bool>) -> Option<PathBuf> {
         if self
             .repo_dir(&path[..path.len() - 1], mkdir)
-            .is_ok_and(|opt| opt.is_some())
+            .is_ok_and(|opt| {
+                debug!("repo_file - is ok, is_some: {}", opt.is_some());
+                opt.is_some()
+            })
         {
+            debug!("repo_file - path: {:?}", path);
             return Some(self.repo_path(path));
         }
         None
@@ -85,6 +89,12 @@ impl RGitRepository {
     fn repo_dir(&self, path: &[&str], mkdir: Option<bool>) -> Result<Option<PathBuf>> {
         let path = self.repo_path(path);
 
+        debug!(
+            "repo_dir - path: {:?}, exists: {}, is_dir: {}",
+            path,
+            path.exists(),
+            path.is_dir()
+        );
         if path.exists() {
             if path.is_dir() {
                 return Ok(Some(path));
@@ -110,18 +120,27 @@ impl RGitRepository {
     fn object_read(&self, sha: String) -> Result<GitObject> {
         match self.repo_file(&vec!["objects", &sha[0..2], &sha[2..]], None) {
             Some(path) => {
-                let mut z = ZlibDecoder::new(File::open(path)?);
+                debug!("object_read - path: {:?}", path);
+                let mut z = ZlibDecoder::new(File::open(path).context("could not open a file")?);
                 let mut s = String::new();
-                z.read_to_string(&mut s)?;
+                z.read_to_string(&mut s)
+                    .context("could not read to string")?;
 
-                GitObject::new(s, self)
+                GitObject::object_read(s, self)
             }
             None => bail!("object not found"),
         }
     }
 
-    fn object_find(name: String, fmt: Option<String>, follow: Option<bool>) {
-        unimplemented!()
+    fn object_find(&self, name: String, fmt: Option<String>, follow: Option<bool>) -> String {
+        name
+    }
+
+    pub fn cat_file(&self, obj: String, fmt: Option<String>) -> Result<()> {
+        let object = self.object_read(self.object_find(obj, fmt, None))?;
+        debug!("cat_file - object found");
+        println!("{}", object.serialize());
+        Ok(())
     }
 }
 
@@ -176,7 +195,7 @@ fn repo_default_config() -> Ini {
 }
 
 /// Searches for .git directory.
-fn repo_find<P: AsRef<Path>>(
+pub fn repo_find<P: AsRef<Path>>(
     path: Option<P>,
     required: Option<bool>,
 ) -> Result<Option<RGitRepository>> {
