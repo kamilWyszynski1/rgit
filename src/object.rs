@@ -4,6 +4,7 @@ use crypto::digest::Digest;
 use crypto::sha1::Sha1;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
+use indexmap::IndexMap;
 use std::fs;
 use std::io::Write;
 use std::str::{from_utf8, FromStr};
@@ -11,7 +12,7 @@ use std::str::{from_utf8, FromStr};
 use crate::repository::RGitRepository;
 use crate::Result;
 
-#[derive(Debug, Clone, Copy, ArgEnum)]
+#[derive(Debug, Clone, Copy, ArgEnum, PartialEq)]
 pub enum GitObjectType {
     Commit,
     Tree,
@@ -63,7 +64,10 @@ impl GitObjectType {
 pub struct GitObject<'a> {
     repo: &'a RGitRepository,
     data: Option<String>,
-    object_type: Option<GitObjectType>,
+    pub object_type: Option<GitObjectType>,
+
+    /// object specific fields.
+    pub kvlm: Option<IndexMap<String, Vec<String>>>,
 }
 
 impl<'a> GitObject<'a> {
@@ -76,6 +80,7 @@ impl<'a> GitObject<'a> {
             repo,
             data: data.clone(),
             object_type,
+            kvlm: None,
         };
 
         if let Some(data) = data {
@@ -114,7 +119,10 @@ impl<'a> GitObject<'a> {
 
     pub fn serialize(&self) -> String {
         match &self.object_type.as_ref().unwrap() {
-            GitObjectType::Commit => todo!(),
+            GitObjectType::Commit => match &self.kvlm {
+                Some(kvlm) => kvlm_serialize(kvlm),
+                None => "kvlm is not set".to_string(),
+            },
             GitObjectType::Tree => todo!(),
             GitObjectType::Tag => todo!(),
             GitObjectType::Blob => self.data.as_ref().expect("git blob has empty data").into(),
@@ -123,7 +131,9 @@ impl<'a> GitObject<'a> {
 
     pub fn deserialize(&mut self, data: String) {
         match self.object_type.as_ref().unwrap() {
-            GitObjectType::Commit => todo!(),
+            GitObjectType::Commit => {
+                self.kvlm = Some(kvlm_parse(data, None, None).expect("failed to kvlm parse"))
+            }
             GitObjectType::Tree => todo!(),
             GitObjectType::Tag => todo!(),
             GitObjectType::Blob => self.data = Some(data),
@@ -165,5 +175,134 @@ impl<'a> GitObject<'a> {
         }
 
         Ok(sha)
+    }
+}
+
+fn kvlm_parse(
+    raw: String,
+    start: Option<usize>,
+    dct: Option<IndexMap<String, Vec<String>>>,
+) -> Result<IndexMap<String, Vec<String>>> {
+    let start = start.unwrap_or_default();
+    let mut dct = dct.unwrap_or_default();
+
+    let spc = raw[start..].find(' ').map(|i| i + start);
+    let nl = raw[start..].find("\n").map(|i| i + start);
+
+    // If space appears before newline, we have a keyword.
+    //
+    // If newline appears first (or there's no space at all, in which
+    // case find returns -1), we assume a blank line.  A blank line
+    // means the remainder of the data is the message.
+
+    debug!(
+        "kvlm_parse - nl: {:?}, start: {}, spc: {:?}, dct: {:?}",
+        nl, start, spc, dct,
+    );
+    if spc.is_none() || (spc.is_some() && nl.is_some() && (nl.unwrap() < spc.unwrap())) {
+        // assert!(nl.unwrap() == start);
+
+        dct.insert("".into(), vec![raw[start + 1..].into()]);
+        return Ok(dct);
+    }
+
+    let spc = spc.unwrap();
+
+    // Recursive case - we read a key-value pair and recurse for the next.
+    let key = &raw[start..spc];
+
+    // Find the end of the value. Continuation lines begin with a
+    // space, so we loop until we find a "\n" not followed by a space.
+    let mut end = start;
+
+    loop {
+        match raw[end + 1..].find("\n").map(|i| i + end + 1) {
+            Some(v) => end = v,
+            None => break,
+        }
+
+        if !raw
+            .chars()
+            .nth(end + 1)
+            .unwrap_or_default()
+            .eq(&char::from_u32(32).unwrap())
+        {
+            break;
+        }
+    }
+
+    // Grab the value. Also, drop the leading space on continuation lines.
+    let value = raw[spc + 1..end].replace("\n ", "\n");
+
+    dct.entry(key.to_owned()).or_insert(vec![]).push(value);
+
+    kvlm_parse(raw, Some(end + 1), Some(dct))
+}
+
+fn kvlm_serialize(kvlm: &IndexMap<String, Vec<String>>) -> String {
+    let mut ret: String = String::from("");
+
+    for (k, v) in kvlm {
+        if k == "" {
+            continue;
+        }
+        v.iter().for_each(|val| {
+            ret += format!("{} {}\n", &k, val.replace("\n", "\n ")).as_str();
+            // ret += &k + " " + &(val.replace("\n", "\n ")) + "\n";
+        })
+    }
+
+    ret += format!("\n{}", kvlm[""][0]).as_str();
+    ret
+}
+
+#[cfg(test)]
+mod tests {
+    use indexmap::IndexMap;
+
+    use super::kvlm_parse;
+
+    #[test]
+    fn test_kvlm_parse() {
+        let content = "tree 29ff16c9c14e2652b22f8b78bb08a5a07930c147
+parent 206941306e8a8af65b66eaaaea388a7ae24d49a0
+author Thibault Polge <thibault@thb.lt> 1527025023 +0200
+committer Thibault Polge <thibault@thb.lt> 1527025044 +0200
+
+Create first draft";
+
+        let values = kvlm_parse(content.to_string(), None, None);
+        let wanted = IndexMap::from([
+            (
+                String::from("tree"),
+                vec![String::from("29ff16c9c14e2652b22f8b78bb08a5a07930c147")],
+            ),
+            (
+                String::from("parent"),
+                vec![String::from("206941306e8a8af65b66eaaaea388a7ae24d49a0")],
+            ),
+            (
+                String::from("author"),
+                vec![
+                    String::from("Thibault"),
+                    String::from("Polge"),
+                    String::from("<thibault@thb.lt>"),
+                    String::from("1527025023"),
+                    String::from("+0200"),
+                ],
+            ),
+            (
+                String::from("committer"),
+                vec![
+                    String::from("Thibault"),
+                    String::from("Polge"),
+                    String::from("<thibault@thb.lt>"),
+                    String::from("1527025044"),
+                    String::from("+0200"),
+                ],
+            ),
+            (String::from(""), vec![String::from("Create first draft")]),
+        ]);
+        assert_eq!(values.unwrap(), wanted);
     }
 }

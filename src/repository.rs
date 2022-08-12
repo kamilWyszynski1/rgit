@@ -117,7 +117,7 @@ impl RGitRepository {
     /// first two characters, then a directory delimiter /, then the remaining part) and look it up inside of the
     /// “objects” directory in the gitdir. That is, the path to e673d1b7eaa0aa01b5bc2442d570a765bdaae751 is
     /// .git/objects/e6/73d1b7eaa0aa01b5bc2442d570a765bdaae751.
-    fn object_read(&self, sha: String) -> Result<GitObject> {
+    pub fn object_read(&self, sha: &str) -> Result<GitObject> {
         match self.repo_file(&vec!["objects", &sha[0..2], &sha[2..]], None) {
             Some(path) => {
                 debug!("object_read - path: {:?}", path);
@@ -132,12 +132,12 @@ impl RGitRepository {
         }
     }
 
-    fn object_find(&self, name: String, fmt: Option<String>, follow: Option<bool>) -> String {
-        name
+    pub fn object_find(&self, name: &str, fmt: Option<String>, follow: Option<bool>) -> String {
+        name.to_string()
     }
 
-    pub fn cat_file(&self, obj: String, fmt: Option<String>) -> Result<()> {
-        let object = self.object_read(self.object_find(obj, fmt, None))?;
+    pub fn cat_file(&self, obj: &str, fmt: Option<String>) -> Result<()> {
+        let object = self.object_read(&self.object_find(obj, fmt, None))?;
         debug!("cat_file - object found");
         println!("{}", object.serialize());
         Ok(())

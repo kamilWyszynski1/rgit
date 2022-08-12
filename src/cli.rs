@@ -3,9 +3,9 @@ use crate::{
     repository::{repo_find, RGitRepository},
     Result,
 };
-use anyhow::{bail, Context};
-use clap::{ArgEnum, Parser, Subcommand};
-use std::{fs, str::FromStr};
+use anyhow::{Context, Ok};
+use clap::{Parser, Subcommand};
+use std::{collections::HashSet, fs};
 
 use crate::repository::repo_create;
 
@@ -52,6 +52,13 @@ pub enum Commands {
         /// Read object from <file>.
         file: String,
     },
+
+    /// Display history of a given commit.
+    Log {
+        /// Commit to start at.
+        #[clap(default_value = "HEAD")]
+        commit: String,
+    },
 }
 
 impl Commands {
@@ -65,6 +72,7 @@ impl Commands {
             Commands::HashObject { tpe, write, file } => {
                 cmd_hash_object(tpe, *write, file).expect("cmd hash object failed")
             }
+            Commands::Log { commit } => cmd_log(commit).expect("cmd log failed"),
         }
     }
 }
@@ -72,7 +80,7 @@ impl Commands {
 fn cmd_cat_file(object_type: &GitObjectType, object: &str) -> Result<()> {
     let repo = repo_find::<&str>(None, None)?.context("repo not found")?;
 
-    repo.cat_file(object.to_string(), Some(object_type.to_string()))?;
+    repo.cat_file(object, Some(object_type.to_string()))?;
 
     Ok(())
 }
@@ -84,6 +92,47 @@ fn cmd_hash_object(object_type: &GitObjectType, write: bool, file: &str) -> Resu
 
     let data = GitObject::new(&repo, Some(data), Some(*object_type))?.object_write(Some(write))?;
     println!("{}", data);
+
+    Ok(())
+}
+
+fn cmd_log(commit: &str) -> Result<()> {
+    let repo = repo_find::<&str>(None, None)?.context("repo not found")?;
+
+    println!("digraph wyaglog{{");
+    log_graphviz(
+        &repo,
+        &repo.object_find(commit, None, None),
+        &mut HashSet::new(),
+    )?;
+    println!("}}");
+    Ok(())
+}
+
+fn log_graphviz(repo: &RGitRepository, sha: &str, seen: &mut HashSet<String>) -> Result<()> {
+    if seen.contains(sha) {
+        return Ok(());
+    }
+    seen.insert(sha.to_string());
+
+    let commit = repo.object_read(sha)?;
+    assert_eq!(
+        commit.object_type.context("object type is None")?,
+        GitObjectType::Commit
+    );
+
+    let kvlm = commit.kvlm.context("kvlm is empty")?;
+    if !kvlm.contains_key("parent") {
+        // initial commit.
+        return Ok(());
+    }
+
+    let parents = &kvlm["parent"];
+
+    for p in parents {
+        println!("c_{} -> c_{}", sha, p);
+        log_graphviz(repo, p, seen)?
+    }
 
     Ok(())
 }

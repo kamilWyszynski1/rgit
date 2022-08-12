@@ -6,6 +6,7 @@ extern crate log;
 
 mod cli;
 mod file;
+mod leaf;
 mod object;
 mod repository;
 
@@ -13,7 +14,7 @@ pub type Result<T> = std::result::Result<T, anyhow::Error>;
 
 fn main() {
     env_logger::init();
-    
+
     let cli = cli::Cli::parse();
     cli.run();
 }
